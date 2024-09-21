@@ -258,8 +258,6 @@ public class MainActivity extends AppCompatActivity {
         try {
             PackageInfo packageInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
             String versionName = packageInfo.versionName; // 获取版本名称
-            int versionCode = packageInfo.versionCode; // 获取版本号
-
             tvVersion.setText("Version: " + versionName);
         } catch (PackageManager.NameNotFoundException e) {
             e.printStackTrace();
