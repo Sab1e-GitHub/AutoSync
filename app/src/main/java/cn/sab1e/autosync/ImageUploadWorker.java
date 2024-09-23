@@ -1,9 +1,15 @@
 package cn.sab1e.autosync;
 
+import static android.content.Context.MODE_PRIVATE;
+import static cn.sab1e.autosync.MainActivity.PREFS_NAME;
+import static cn.sab1e.autosync.MainActivity.PREF_API_URL;
+import static cn.sab1e.autosync.MainActivity.PREF_TOKEN;
+
 import android.app.Activity;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.util.Log;
 
@@ -87,8 +93,13 @@ public class ImageUploadWorker extends Worker {
             try {
                 InputStream inputStream = getApplicationContext().getContentResolver().openInputStream(imageUri);
                 String fileName = Objects.requireNonNull(DocumentFile.fromSingleUri(getApplicationContext(), imageUri).getName());
+                Context context = getApplicationContext();
+                SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
 
-                ImageUploader uploader = new ImageUploader(getApplicationContext(), MainActivity.PREF_TOKEN, MainActivity.PREF_API_URL);
+                PREF_API_URL = prefs.getString(PREF_API_URL, "");
+                PREF_TOKEN = prefs.getString(PREF_TOKEN, "");
+
+                ImageUploader uploader = new ImageUploader(getApplicationContext(), PREF_TOKEN, PREF_API_URL);
                 String result = uploader.uploadImage(inputStream, fileName);
 
                 boolean isSuccessful = result.contains("\"code\":200");
