@@ -2,16 +2,14 @@ package cn.sab1e.autosync;
 
 import static android.content.Context.MODE_PRIVATE;
 import static cn.sab1e.autosync.MainActivity.PREFS_NAME;
-import static cn.sab1e.autosync.MainActivity.PREF_API_URL;
-import static cn.sab1e.autosync.MainActivity.PREF_TOKEN;
 
-import android.app.Activity;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.util.Log;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.core.app.NotificationCompat;
@@ -28,7 +26,8 @@ public class ImageUploadWorker extends Worker {
 
     private static final String CHANNEL_ID = "image_upload_channel";
     private static final int NOTIFICATION_ID = 1;
-    private NotificationManager notificationManager;
+    private final NotificationManager notificationManager;
+    private static boolean isUploading = false;
 
     public ImageUploadWorker(@NonNull Context context, @NonNull WorkerParameters workerParams) {
         super(context, workerParams);
@@ -40,38 +39,45 @@ public class ImageUploadWorker extends Worker {
     @NonNull
     @Override
     public Result doWork() {
-        Log.d("ImageUploadWorker", "开始执行周期任务");
-        // 从传递的参数中获取 URI 字符串
-        String uriString = getInputData().getString("directory_uri");
-        if (uriString == null) {
-            return Result.failure();
+        if (isUploading) {
+            Log.d("ImageUploadWorker", "当前正在上传，任务被忽略。");
+            return Result.success();
         }
 
-        Uri directoryUri = Uri.parse(uriString);
+        isUploading = true;
 
-        DocumentFile directory = DocumentFile.fromTreeUri(getApplicationContext(), directoryUri);
+        try {
+            String uriString = getInputData().getString("directory_uri");
+            if (uriString == null) {
+                return Result.failure();
+            }
 
-        if (directory != null && directory.isDirectory()) {
-            DocumentFile[] files = directory.listFiles();
-            List<Uri> imageUris = new ArrayList<>();
+            Uri directoryUri = Uri.parse(uriString);
+            DocumentFile directory = DocumentFile.fromTreeUri(getApplicationContext(), directoryUri);
 
-            for (DocumentFile file : files) {
-                if (isImageFile(file)) {
-                    imageUris.add(file.getUri());
+            if (directory != null && directory.isDirectory()) {
+                List<Uri> imageUris = new ArrayList<>();
+                DocumentFile[] files = directory.listFiles();
+
+                for (DocumentFile file : files) {
+                    if (isImageFile(file)) {
+                        imageUris.add(file.getUri());
+                    }
                 }
-            }
 
-            if (!imageUris.isEmpty()) {
-                showNotificationProgress(imageUris.size(), 0);
-                uploadImages(imageUris);
-                return Result.success(); // 上传成功后返回成功
-            } else {
-                Log.d("ImageUploadWorker", "没有可上传的图片");
+                if (!imageUris.isEmpty()) {
+                    showNotificationProgress(imageUris.size(), 0);
+                    uploadImages(imageUris);
+                } else {
+                    Log.d("ImageUploadWorker", "没有可上传的图片");
+                }
                 return Result.success();
+            } else {
+                Log.e("ImageUploadWorker", "无效的文件夹");
+                return Result.failure();
             }
-        } else {
-            Log.e("ImageUploadWorker", "无效的文件夹");
-            return Result.failure();
+        } finally {
+            isUploading = false;
         }
     }
 
@@ -92,20 +98,19 @@ public class ImageUploadWorker extends Worker {
             Uri imageUri = imageUris.get(i);
             try {
                 InputStream inputStream = getApplicationContext().getContentResolver().openInputStream(imageUri);
-                String fileName = Objects.requireNonNull(DocumentFile.fromSingleUri(getApplicationContext(), imageUri).getName());
+                String fileName = Objects.requireNonNull(Objects.requireNonNull(DocumentFile.fromSingleUri(getApplicationContext(), imageUri)).getName());
                 Context context = getApplicationContext();
                 SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
 
-                PREF_API_URL = prefs.getString(PREF_API_URL, "");
-                PREF_TOKEN = prefs.getString(PREF_TOKEN, "");
+                String PREF_API_URL = prefs.getString(MainActivity.PREF_API_URL, "");
+                String PREF_TOKEN = prefs.getString(MainActivity.PREF_TOKEN, "");
 
                 ImageUploader uploader = new ImageUploader(getApplicationContext(), PREF_TOKEN, PREF_API_URL);
-                String result = uploader.uploadImage(inputStream, fileName);
+                String result = uploader.uploadImage(Objects.requireNonNull(inputStream), fileName);
 
                 boolean isSuccessful = result.contains("\"code\":200");
                 if (isSuccessful) {
                     Log.d("Upload", "上传成功: " + fileName);
-                    // 删除已上传的文件
                     DocumentFile file = DocumentFile.fromSingleUri(getApplicationContext(), imageUri);
                     if (file != null && file.delete()) {
                         Log.d("Upload", "已删除: " + fileName);
@@ -118,61 +123,63 @@ public class ImageUploadWorker extends Worker {
                 Log.e("Upload", "上传过程中出现异常", e);
                 isSuccess = false;
             }
-            // 更新通知中的进度条
             showNotificationProgress(imageUris.size(), i + 1);
+            //模拟上传延迟
+//            try {
+//                Thread.sleep(5000);
+//            }catch (Exception e){
+//                Log.e("Upload",e.toString());
+//            }
         }
-        if (isSuccess){
-            // 上传完成后显示完成通知
+        if (isSuccess) {
             showNotificationComplete();
-        }else {
+        } else {
             showNotificationError();
         }
     }
 
     private void createNotificationChannel() {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID,
-                    "Image Upload",
-                    NotificationManager.IMPORTANCE_LOW
-            );
-            channel.setDescription("用于显示图片上传的进度");
-            notificationManager.createNotificationChannel(channel);
-        }
+        NotificationChannel channel = new NotificationChannel(
+                CHANNEL_ID,
+                "Image Upload",
+                NotificationManager.IMPORTANCE_LOW
+        );
+        channel.setDescription("用于显示图片上传的进度");
+        notificationManager.createNotificationChannel(channel);
     }
 
     private void showNotificationProgress(int totalImages, int currentImage) {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(getApplicationContext(), CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_launcher_foreground) // 设置通知栏的小图标
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
                 .setContentTitle("正在上传图片")
                 .setContentText("正在上传第 " + currentImage + " 张，共 " + totalImages + " 张")
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setProgress(totalImages, currentImage, false)
-                .setOngoing(true); // 防止用户关闭通知
+                .setOngoing(true);
 
         notificationManager.notify(NOTIFICATION_ID, builder.build());
     }
 
     private void showNotificationComplete() {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(getApplicationContext(), CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_launcher_foreground) // 设置完成的图标
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
                 .setContentTitle("图片上传完成")
                 .setContentText("所有图片已成功上传")
                 .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setProgress(0, 0, false) // 清除进度条
-                .setOngoing(false); // 允许用户关闭通知
+                .setProgress(0, 0, false)
+                .setOngoing(false);
 
         notificationManager.notify(NOTIFICATION_ID, builder.build());
     }
 
     private void showNotificationError() {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(getApplicationContext(), CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_launcher_foreground) // 设置完成的图标
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
                 .setContentTitle("图片上传错误")
                 .setContentText("部分图片上传失败")
                 .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setProgress(0, 0, false) // 清除进度条
-                .setOngoing(false); // 允许用户关闭通知
+                .setProgress(0, 0, false)
+                .setOngoing(false);
 
         notificationManager.notify(NOTIFICATION_ID, builder.build());
     }

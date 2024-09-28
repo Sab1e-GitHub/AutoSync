@@ -24,11 +24,13 @@
             android:id="@+id/et_token"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:inputType="textPassword"
             android:hint="Token"/>
         <EditText
             android:id="@+id/et_interval"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:inputType="number"
             android:hint="间隔时间"/>
         <Button
             android:id="@+id/btn_saveParameter"

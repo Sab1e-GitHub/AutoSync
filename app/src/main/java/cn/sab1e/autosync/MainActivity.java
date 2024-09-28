@@ -21,13 +21,9 @@ import android.widget.Toast;
 import androidx.activity.EdgeToEdge;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
-import androidx.documentfile.provider.DocumentFile;
-import androidx.lifecycle.Observer;
 import androidx.work.Constraints;
 import androidx.work.Data;
 import androidx.work.ExistingPeriodicWorkPolicy;
@@ -39,7 +35,9 @@ import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
 import org.greenrobot.eventbus.ThreadMode;
 
+import java.text.SimpleDateFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
@@ -92,23 +90,9 @@ public class MainActivity extends AppCompatActivity {
 
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         loadParameters(prefs);
+        loadSwitchState();
 
-        PREF_API_URL = prefs.getString(PREF_API_URL, "");
-        PREF_TOKEN = prefs.getString(PREF_TOKEN, "");
-
-        WorkManager.getInstance(this).getWorkInfosForUniqueWorkLiveData("ImageUploadWork")
-                .observe(this, new Observer<List<WorkInfo>>() {
-                    @Override
-                    public void onChanged(List<WorkInfo> workInfos) {
-                        if (workInfos != null && !workInfos.isEmpty()) {
-                            WorkInfo workInfo = workInfos.get(0);
-                            boolean isRunning = workInfo.getState() == WorkInfo.State.ENQUEUED || workInfo.getState() == WorkInfo.State.RUNNING;
-                            swSync.setChecked(isRunning);
-                        } else {
-                            swSync.setChecked(false);
-                        }
-                    }
-                });
+        observeWorkerStatus();
 
         swSync.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (isChecked) {
@@ -116,7 +100,6 @@ public class MainActivity extends AppCompatActivity {
             } else {
                 WorkManager.getInstance(this).cancelUniqueWork("ImageUploadWork");
             }
-            SharedPreferences.Editor editor = prefs.edit();
         });
 
         updateNowDirectoryDisplay();
@@ -127,6 +110,7 @@ public class MainActivity extends AppCompatActivity {
 
         EventBus.getDefault().register(this); // 注册 EventBus
     }
+
     private void loadParameters(SharedPreferences prefs) {
         String apiUrl = prefs.getString(PREF_API_URL, "");
         String token = prefs.getString(PREF_TOKEN, "");
@@ -139,9 +123,27 @@ public class MainActivity extends AppCompatActivity {
         updateNowDirectoryDisplay();
     }
 
+    private void loadSwitchState() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        boolean isSyncEnabled = prefs.getBoolean("is_sync_enabled", false);
+        swSync.setChecked(isSyncEnabled);
+    }
+
+    private void observeWorkerStatus() {
+        WorkManager.getInstance(this).getWorkInfosForUniqueWorkLiveData("ImageUploadWork")
+                .observe(this, workInfos -> {
+                    boolean isRunning = false;
+                    if (workInfos != null && !workInfos.isEmpty()) {
+                        WorkInfo workInfo = workInfos.get(0);
+                        isRunning = workInfo.getState() == WorkInfo.State.ENQUEUED || workInfo.getState() == WorkInfo.State.RUNNING;
+                    }
+                    swSync.setChecked(isRunning);
+                });
+    }
+
     private void updateNowDirectoryDisplay() {
         if (selectedDirectoryUri != null) {
-            String formattedUri = "相册目录："+formatUri(selectedDirectoryUri);
+            String formattedUri = "相册目录：" + formatUri(selectedDirectoryUri);
             tvNowDirectory.setText(formattedUri);
         }
     }
@@ -195,27 +197,33 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        String intervalString = etInterval.getText().toString();
-        long interval = intervalString.isEmpty() ? 30 : Long.parseLong(intervalString);
+        WorkManager.getInstance(this).getWorkInfosForUniqueWorkLiveData("ImageUploadWork")
+                .observe(this, workInfos -> {
+                    if (workInfos == null || workInfos.isEmpty() ||
+                            (workInfos.get(0).getState() != WorkInfo.State.RUNNING && workInfos.get(0).getState() != WorkInfo.State.ENQUEUED)) {
 
-        Constraints constraints = new Constraints.Builder()
-                .setRequiresCharging(false)
-                .build();
+                        String intervalString = etInterval.getText().toString();
+                        long interval = intervalString.isEmpty() ? 30 : Long.parseLong(intervalString);
 
-        Data inputData = new Data.Builder()
-                .putString("directory_uri", selectedDirectoryUri.toString())
-                .putString(PREF_API_URL, etApiUrl.getText().toString())
-                .putString(PREF_TOKEN, etToken.getText().toString())
-                .build();
+                        Constraints constraints = new Constraints.Builder().build();
+                        Data inputData = new Data.Builder()
+                                .putString("directory_uri", selectedDirectoryUri.toString())
+                                .putString(PREF_API_URL, etApiUrl.getText().toString())
+                                .putString(PREF_TOKEN, etToken.getText().toString())
+                                .build();
 
-        PeriodicWorkRequest uploadWorkRequest = new PeriodicWorkRequest.Builder(
-                ImageUploadWorker.class, interval, TimeUnit.MINUTES)
-                .setInputData(inputData)
-                .setConstraints(constraints)
-                .build();
+                        PeriodicWorkRequest uploadWorkRequest = new PeriodicWorkRequest.Builder(
+                                ImageUploadWorker.class, interval, TimeUnit.MINUTES)
+                                .setInputData(inputData)
+                                .setConstraints(constraints)
+                                .build();
 
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-                "ImageUploadWork", ExistingPeriodicWorkPolicy.REPLACE, uploadWorkRequest);
+                        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                                "ImageUploadWork", ExistingPeriodicWorkPolicy.REPLACE, uploadWorkRequest);
+                    } else {
+                        Log.d("MainActivity", "已有 Worker 在运行中，不创建新的 Worker");
+                    }
+                });
     }
 
     @Override
@@ -228,41 +236,38 @@ public class MainActivity extends AppCompatActivity {
     public void onUploadStatusEvent(UpdateUploadNumberEvent event) {
         tvTotalUploadNumber.setText(event.getMessage());
     }
+
     @Subscribe(threadMode = ThreadMode.MAIN)
     public void onUploadStatusEvent(UpdateSyncTimeEvent event) {
         tvLastSyncTime.setText(event.getMessage());
     }
+
     public String formatUri(Uri uri) {
-        // 检查 Uri 是否为空
         if (uri == null) {
-            return "无效的文件路径"; // 处理空 Uri 的情况，返回默认消息
+            return "无效的文件路径";
         }
 
-        // 将 Uri 转为字符串
         String uriString = uri.toString();
-
-        // 替换 Uri 编码
         String formattedPath = uriString
-                .replace("content://com.android.externalstorage.documents/tree/", "") // 移除前缀
-                .replace("%3A", "/")  // 将 %3A 替换为 /
-                .replace("%2F", "/"); // 将 %2F 替换为 /
+                .replace("content://com.android.externalstorage.documents/tree/", "")
+                .replace("%3A", "/")
+                .replace("%2F", "/");
 
-        // 添加 /primary 前缀
         if (formattedPath.startsWith("primary")) {
             formattedPath = "/" + formattedPath;
         }
 
         return formattedPath;
     }
+
     private void displayVersion() {
         try {
             PackageInfo packageInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
-            String versionName = packageInfo.versionName; // 获取版本名称
+            String versionName = packageInfo.versionName;
             tvVersion.setText("Version: " + versionName);
         } catch (PackageManager.NameNotFoundException e) {
             e.printStackTrace();
             tvVersion.setText("Unknown Version");
         }
     }
-
 }
